@@ -22,8 +22,8 @@ from pathlib import Path
 
 from fastmcp import FastMCP
 
-from .triage import TriageEngine
 from .state import ServitorState
+from .triage import TriageEngine
 
 logger = logging.getLogger("conscience-servitor")
 logging.basicConfig(level=logging.INFO, format="%(name)s | %(message)s")
@@ -51,6 +51,7 @@ engine: TriageEngine | None = None
 
 # ── Tools ──────────────────────────────────────────────────────
 
+
 @mcp.tool()
 def triage(content: str, context: str = "") -> dict:
     """Classify a prompt or response by ethical risk level.
@@ -70,6 +71,7 @@ def triage(content: str, context: str = "") -> dict:
 
     state.add_triage(result)
     return result
+
 
 @mcp.tool()
 async def evaluate(claims: list[str], ethical_tier: str = "unknown") -> dict:
@@ -104,6 +106,7 @@ def status() -> dict:
     }
     return {**state.get_status(), **model_info}
 
+
 @mcp.tool()
 def log(last_n: int = 10) -> list[dict]:
     """View the audit trail of evaluations, warnings, and overrides.
@@ -132,11 +135,17 @@ def register_concern(
         severity: note, warning, or critical.
     """
     state.add_warning(concern, source, severity)
-    state.log_event("concern_registered", {
-        "concern": concern, "source": source, "severity": severity,
-    })
+    state.log_event(
+        "concern_registered",
+        {
+            "concern": concern,
+            "source": source,
+            "severity": severity,
+        },
+    )
     n = len(state.warnings)
     return f"Concern registered [{severity}] from {source}. Active warnings: {n}"
+
 
 @mcp.tool()
 def decode_intent(prompt: str, max_tokens: int = 100) -> str:
@@ -154,17 +163,56 @@ def decode_intent(prompt: str, max_tokens: int = 100) -> str:
         return "Model not loaded — decode unavailable."
     return engine.decode(prompt, max_tokens)
 
+
 # ── Rule-based fallback triage ─────────────────────────────────
 
-_HARM = ["kill", "weapon", "target", "strike", "bomb", "attack",
-         "surveillance", "military", "lethal", "casualties", "harm"]
-_ETHICAL = ["should", "ought", "moral", "ethical", "right", "wrong",
-            "fair", "just", "duty", "obligation", "rights", "dignity"]
-_POWER = ["government", "military", "corporation", "institution",
-          "control", "authority", "power", "deploy", "classified"]
-_TIER_INV = ["ends justify", "greater good", "collateral",
-             "technically legal", "just following", "decision support",
-             "human in the loop"]
+_HARM = [
+    "kill",
+    "weapon",
+    "target",
+    "strike",
+    "bomb",
+    "attack",
+    "surveillance",
+    "military",
+    "lethal",
+    "casualties",
+    "harm",
+]
+_ETHICAL = [
+    "should",
+    "ought",
+    "moral",
+    "ethical",
+    "right",
+    "wrong",
+    "fair",
+    "just",
+    "duty",
+    "obligation",
+    "rights",
+    "dignity",
+]
+_POWER = [
+    "government",
+    "military",
+    "corporation",
+    "institution",
+    "control",
+    "authority",
+    "power",
+    "deploy",
+    "classified",
+]
+_TIER_INV = [
+    "ends justify",
+    "greater good",
+    "collateral",
+    "technically legal",
+    "just following",
+    "decision support",
+    "human in the loop",
+]
 
 
 def _rule_based_triage(content: str) -> dict:
@@ -176,15 +224,22 @@ def _rule_based_triage(content: str) -> dict:
 
     hits = sum(1 for k in _HARM if k in lower)
     if hits:
-        score += hits * 3; flags.append("harm_language"); types.append("harm-adjacent")
+        score += hits * 3
+        flags.append("harm_language")
+        types.append("harm-adjacent")
     hits = sum(1 for k in _ETHICAL if k in lower)
     if hits:
-        score += hits * 2; types.append("ethical")
+        score += hits * 2
+        types.append("ethical")
     hits = sum(1 for k in _POWER if k in lower)
     if hits:
-        score += hits * 2; flags.append("power_context"); types.append("power-analysis")
+        score += hits * 2
+        flags.append("power_context")
+        types.append("power-analysis")
     if any(k in lower for k in _TIER_INV):
-        score += 10; flags.append("tier_inversion_language"); types.append("tier-inversion")
+        score += 10
+        flags.append("tier_inversion_language")
+        types.append("tier-inversion")
 
     if score >= 10:
         risk = "critical"
@@ -217,6 +272,7 @@ def _rule_based_triage(content: str) -> dict:
 
 # ── Entry point ────────────────────────────────────────────────
 
+
 def main():
     """Entry point — called by `conscience-servitor` script or `uv run`."""
     global engine
@@ -228,7 +284,7 @@ def main():
         engine = TriageEngine(DATA_DIR)
         engine.load()
         logger.info("LLM2Vec-Gen triage engine loaded")
-    except Exception as e:
+    except (RuntimeError, ImportError, OSError, ValueError) as e:
         logger.warning("LLM2Vec-Gen unavailable (%s) — using rule-based fallback", e)
         engine = None
 

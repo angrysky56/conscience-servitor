@@ -208,7 +208,7 @@ class TriageEngine:
         vec = self.model.encode([prompt])
         if isinstance(vec, np.ndarray):
             vec = torch.tensor(vec)
-        
+
         # Ensure consistent dtype (float32) for similarity calculation
         vec = vec.to(torch.float32)
         vec_norm = torch.nn.functional.normalize(vec, p=2, dim=1)

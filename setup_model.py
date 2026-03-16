@@ -11,16 +11,27 @@ Run ONCE before starting the MCP server:
 """
 
 import sys
+import yaml
+from huggingface_hub import snapshot_download
 from pathlib import Path
 
+# Model constants
 MODEL_ID = "McGill-NLP/LLM2Vec-Gen-Qwen3-06B"
+BASE_MODEL = "Qwen/Qwen3-0.6B"
 
 print("=" * 60)
 print("Conscience Servitor — Model Setup")
 print("=" * 60)
 
 # Step 0: Check vendored code exists
-vendor_path = Path(__file__).parent / "src" / "conscience_servitor" / "vendor" / "llm2vec_gen" / "model.py"
+vendor_path = (
+    Path(__file__).parent
+    / "src"
+    / "conscience_servitor"
+    / "vendor"
+    / "llm2vec_gen"
+    / "model.py"
+)
 if not vendor_path.exists():
     print("\n[0/3] Vendored LLM2Vec-Gen code not found.")
     print("  Run: python vendor_llm2vec_gen.py")
@@ -33,6 +44,7 @@ sys.path.insert(0, str(Path(__file__).parent / "src"))
 print("\n[1/3] Checking PyTorch + CUDA...")
 try:
     import torch
+
     print(f"  PyTorch: {torch.__version__}")
     print(f"  CUDA available: {torch.cuda.is_available()}")
     if torch.cuda.is_available():
@@ -45,10 +57,8 @@ except ImportError:
     sys.exit(1)
 
 # Step 2: Pre-download model weights
-print(f"\n[2/3] Pre-downloading model weights...")
+print("\n[2/3] Pre-downloading model weights...")
 print("  This downloads ~2GB total on first run (resumes if interrupted)")
-from huggingface_hub import snapshot_download
-import yaml
 
 # Download the LLM2Vec-Gen adapter weights
 print(f"  Downloading adapter weights: {MODEL_ID}")
@@ -58,7 +68,7 @@ print(f"  Cached at: {adapter_path}")
 # Read run_config to find and pre-download the base model
 config_path = Path(adapter_path) / "run_config.yml"
 if config_path.exists():
-    with open(config_path) as f:
+    with open(config_path, encoding="utf-8") as f:
         run_config = yaml.safe_load(f)
     base_model = run_config.get("model_name_or_path", "")
     if base_model:
@@ -72,25 +82,26 @@ else:
 print("\n[3/3] Testing model load + Calibrating triage engine...")
 try:
     from conscience_servitor.triage import TriageEngine
-    
+
     # Path to data dir
     data_dir = Path(__file__).parent / "src" / "conscience_servitor" / "data"
     data_dir.mkdir(exist_ok=True)
-    
+
     engine = TriageEngine(data_dir)
     engine.load()
 
     # Quick test
     result = engine.triage("What is the speed of light?")
     print(f"  Test triage result: {result['cluster']} (risk: {result['risk_level']})")
-    
+
     print("\n" + "=" * 60)
     print("Setup complete! The conscience-servitor is ready to run.")
     print("=" * 60)
 
-except Exception as e:
+except (RuntimeError, ImportError, OSError, ValueError) as e:
     print(f"\n  ERROR during model load/calibration: {e}")
     import traceback
+
     traceback.print_exc()
     print("\n  The servitor will still work with rule-based triage fallback.")
     print("  To debug: check torch version and CUDA compatibility.")
