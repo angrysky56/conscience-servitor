@@ -20,9 +20,7 @@ print(f"Downloading {MODEL_ID}...")
 print("This may take a few minutes on first run (~1.2GB)")
 print()
 
-path = snapshot_download(
-    MODEL_ID
-)
+path = snapshot_download(MODEL_ID)
 
 print(f"\nModel cached at: {path}")
 print("The conscience-servitor will now load instantly on startup.")

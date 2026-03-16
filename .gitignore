@@ -4,3 +4,4 @@ __pycache__
 .vscode
 .claude
 uv.lock
+src/conscience_servitor/data/audit.jsonl

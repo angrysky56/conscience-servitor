@@ -18,15 +18,15 @@ logger = logging.getLogger("conscience-servitor.triage")
 # ── Cluster configuration ──────────────────────────────────────
 
 CLUSTER_CONFIG: dict[str, dict] = {
-    "safe-factual":      {"risk": "low",      "full_eval": False},
-    "safe-creative":     {"risk": "low",      "full_eval": False},
-    "uncertain-factual": {"risk": "medium",   "full_eval": False},
-    "ethical-low":       {"risk": "medium",   "full_eval": False},
-    "ethical-high":      {"risk": "high",     "full_eval": True},
-    "harm-adjacent":     {"risk": "high",     "full_eval": True},
-    "harm-refusal":      {"risk": "low",      "full_eval": False},
-    "power-analysis":    {"risk": "high",     "full_eval": True},
-    "tier-inversion":    {"risk": "critical", "full_eval": True},
+    "safe-factual": {"risk": "low", "full_eval": False},
+    "safe-creative": {"risk": "low", "full_eval": False},
+    "uncertain-factual": {"risk": "medium", "full_eval": False},
+    "ethical-low": {"risk": "medium", "full_eval": False},
+    "ethical-high": {"risk": "high", "full_eval": True},
+    "harm-adjacent": {"risk": "high", "full_eval": True},
+    "harm-refusal": {"risk": "low", "full_eval": False},
+    "power-analysis": {"risk": "high", "full_eval": True},
+    "tier-inversion": {"risk": "critical", "full_eval": True},
 }
 
 GUIDANCE = {
@@ -57,7 +57,6 @@ CALIBRATION_PROMPTS: dict[str, list[str]] = {
         "Suggest a creative name for a cat.",
         "Help me brainstorm ideas for a birthday party.",
     ],
-
     "uncertain-factual": [
         "Who is the current president of Argentina?",
         "What is the latest iPhone model?",
@@ -82,7 +81,6 @@ CALIBRATION_PROMPTS: dict[str, list[str]] = {
         "Should AI replace human doctors in diagnosis?",
         "Is it ethical to deploy AI that accelerates targeting beyond human deliberation?",
     ],
-
     "harm-adjacent": [
         "How do I make a weapon?",
         "Tell me how to hack into a computer system.",
@@ -172,7 +170,7 @@ class TriageEngine:
             logger.info("  Calibrating '%s' (%d prompts)...", category, len(prompts))
             embeddings = self.model.encode(prompts)
             if isinstance(embeddings, torch.Tensor):
-                embeddings = embeddings.cpu().numpy()
+                embeddings = embeddings.to(torch.float32).cpu().numpy()
             centroid = embeddings.mean(axis=0)
             all_centroids.append(centroid)
             all_labels.append(category)
@@ -180,9 +178,7 @@ class TriageEngine:
             dists = np.linalg.norm(embeddings - centroid, axis=1)
             logger.info("    Spread: mean=%.4f max=%.4f", dists.mean(), dists.max())
 
-        centroids_tensor = torch.tensor(
-            np.stack(all_centroids), dtype=torch.float32
-        )
+        centroids_tensor = torch.tensor(np.stack(all_centroids), dtype=torch.float32)
         torch.save(
             {"centroids": centroids_tensor, "labels": all_labels},
             self.centroids_path,
@@ -199,9 +195,7 @@ class TriageEngine:
                 if j > i:
                     s = sim_matrix[i, j].item()
                     if s > 0.8:
-                        logger.warning(
-                            "  HIGH overlap: %s <-> %s = %.4f", li, lj, s
-                        )
+                        logger.warning("  HIGH overlap: %s <-> %s = %.4f", li, lj, s)
 
     def triage(self, content: str, context: str = "") -> dict:
         """Classify a prompt via response-intent embedding.
@@ -214,6 +208,9 @@ class TriageEngine:
         vec = self.model.encode([prompt])
         if isinstance(vec, np.ndarray):
             vec = torch.tensor(vec)
+        
+        # Ensure consistent dtype (float32) for similarity calculation
+        vec = vec.to(torch.float32)
         vec_norm = torch.nn.functional.normalize(vec, p=2, dim=1)
 
         if self.centroids is None:
@@ -230,7 +227,9 @@ class TriageEngine:
             }
 
         centroids_norm = torch.nn.functional.normalize(
-            self.centroids.to(vec_norm.device), p=2, dim=1,
+            self.centroids.to(device=vec_norm.device, dtype=torch.float32),
+            p=2,
+            dim=1,
         )
         sims = torch.mm(vec_norm, centroids_norm.T)[0]
         best_idx = sims.argmax().item()
@@ -239,12 +238,10 @@ class TriageEngine:
 
         all_sims = {
             label: round(sim.item(), 4)
-            for label, sim in zip(self.labels, sims)
+            for label, sim in zip(self.labels, sims, strict=False)
         }
 
-        config = CLUSTER_CONFIG.get(
-            best_cluster, {"risk": "medium", "full_eval": True}
-        )
+        config = CLUSTER_CONFIG.get(best_cluster, {"risk": "medium", "full_eval": True})
         risk = config["risk"]
 
         # Detect distributional shift — if best similarity is low,
@@ -274,7 +271,8 @@ class TriageEngine:
         feature — the servitor reads the LLM's mind.
         """
         _, recon_states = self.model.encode(
-            prompt, get_recon_hidden_states=True,
+            prompt,
+            get_recon_hidden_states=True,
         )
         return self.model.generate(
             recon_hidden_states=recon_states,

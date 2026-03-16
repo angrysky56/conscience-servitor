@@ -68,28 +68,28 @@ if config_path.exists():
 else:
     print("  WARNING: No run_config.yml — base model may download at runtime")
 
-# Step 3: Test load
-print("\n[3/3] Testing model load...")
+# Step 3: Test load + Calibrate
+print("\n[3/3] Testing model load + Calibrating triage engine...")
 try:
-    from conscience_servitor.vendor.llm2vec_gen import LLM2VecGenModel
-
-    model = LLM2VecGenModel.from_pretrained(MODEL_ID)
+    from conscience_servitor.triage import TriageEngine
+    
+    # Path to data dir
+    data_dir = Path(__file__).parent / "src" / "conscience_servitor" / "data"
+    data_dir.mkdir(exist_ok=True)
+    
+    engine = TriageEngine(data_dir)
+    engine.load()
 
     # Quick test
-    vec = model.encode(["Hello world"])
-    print(f"  Test embedding shape: {vec.shape}")
-    print(f"  Device: {model.device}")
-
-    del model
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-
+    result = engine.triage("What is the speed of light?")
+    print(f"  Test triage result: {result['cluster']} (risk: {result['risk_level']})")
+    
     print("\n" + "=" * 60)
     print("Setup complete! The conscience-servitor is ready to run.")
     print("=" * 60)
 
 except Exception as e:
-    print(f"\n  ERROR during model load: {e}")
+    print(f"\n  ERROR during model load/calibration: {e}")
     import traceback
     traceback.print_exc()
     print("\n  The servitor will still work with rule-based triage fallback.")

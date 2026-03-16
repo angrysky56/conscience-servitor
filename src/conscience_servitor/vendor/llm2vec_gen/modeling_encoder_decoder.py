@@ -1,16 +1,18 @@
 import json
+import logging
 import os
-import random
 import re
 from typing import Any, Dict, Optional, Tuple
 
 import torch
-from peft.peft_model import PeftModel
+from peft import PeftModel
 from transformers import AutoModel, AutoModelForCausalLM, AutoTokenizer, AutoConfig
 from transformers.models.llama.configuration_llama import LlamaConfig
 from transformers.models.qwen2.configuration_qwen2 import Qwen2Config
 from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
 from .utils import safe_load_config
+
+logger = logging.getLogger(__name__)
 
 def prepend_prompt_to_left_padded_tok_embeds(
     tok_embeds: torch.FloatTensor,
@@ -171,7 +173,7 @@ class ProjectionModel(torch.nn.Module):
 
     @classmethod
     def load(cls, path: str, size: Optional[int] = None):
-        checkpoint = torch.load(path)
+        checkpoint = torch.load(path, weights_only=True)
         config = checkpoint["config"]
         dtype = getattr(torch, config["dtype"].replace("torch.", ""))  # recover dtype
         model = cls(
@@ -405,7 +407,7 @@ class EncoderDecoderModel(torch.nn.Module):
                     _save_decoder = saved_config.get("save_decoder", _save_decoder)
             except Exception:
                 # If this file is missing from the repo, fall back to defaults.
-                pass
+                logger.debug("Optional encoder_decoder_config.json not found in Hub repo, using defaults.")
 
         # Decoder: either share encoder weights or load a separate causal LM + adapters
         if not _save_decoder:
@@ -533,7 +535,7 @@ class EncoderDecoderModel(torch.nn.Module):
                 raise ValueError(f"Invalid encoding mode: {self.encoding_mode}")
 
             return hidden_states, hidden_states_attention_mask
-    
+
         if decoder_inputs_embeds is None:
             decoder_input_hidden_states, hidden_states_attention_mask = _encode(query_input_ids, query_attention_mask)
             if self.reconstruction_mlp is not None:
