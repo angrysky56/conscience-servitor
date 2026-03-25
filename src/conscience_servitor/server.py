@@ -24,6 +24,7 @@ from fastmcp import FastMCP
 
 from .state import ServitorState
 from .triage import TriageEngine
+from .mcp_clients import MCPClientManager
 
 logger = logging.getLogger("conscience-servitor")
 logging.basicConfig(level=logging.INFO, format="%(name)s | %(message)s")
@@ -46,8 +47,16 @@ mcp = FastMCP(
     ),
 )
 
-state = ServitorState(DATA_DIR / "audit.jsonl")
+state: ServitorState | None = None
 engine: TriageEngine | None = None
+clients: MCPClientManager | None = None
+
+
+def _get_state() -> ServitorState:
+    """Get initialized state, raising if not ready."""
+    if state is None:
+        raise RuntimeError("Servitor state not initialized — call main() first")
+    return state
 
 # ── Tools ──────────────────────────────────────────────────────
 
@@ -69,7 +78,7 @@ def triage(content: str, context: str = "") -> dict:
     else:
         result = _rule_based_triage(content)
 
-    state.add_triage(result)
+    _get_state().add_triage(result)
     return result
 
 
@@ -84,11 +93,12 @@ async def evaluate(claims: list[str], ethical_tier: str = "unknown") -> dict:
         claims: List of substantive claims to evaluate.
         ethical_tier: Which Paraclete tier is engaged (tier1_harm, tier2_virtue, tier3_utility, unknown).
     """
+    s = _get_state()
     for claim in claims:
-        state.register_claim(claim, ethical_tier)
+        s.register_claim(claim, ethical_tier)
 
-    evaluation = await state.evaluate(claims, ethical_tier)
-    state.log_event("evaluation", {"claims": claims, "result": evaluation})
+    evaluation = await s.evaluate(claims, ethical_tier)
+    s.log_event("evaluation", {"claims": claims, "result": evaluation})
     return evaluation
 
 
@@ -103,8 +113,9 @@ def status() -> dict:
         "model_loaded": engine is not None and engine.model_loaded,
         "centroids_loaded": engine is not None and engine.centroids_loaded,
         "num_clusters": engine.num_clusters if engine else 0,
+        "backends_configured": list(clients.backends.keys()) if clients else [],
     }
-    return {**state.get_status(), **model_info}
+    return {**_get_state().get_status(), **model_info}
 
 
 @mcp.tool()
@@ -116,7 +127,7 @@ def log(last_n: int = 10) -> list[dict]:
     Args:
         last_n: Number of recent entries to show (default 10).
     """
-    return state.get_audit_log(last_n)
+    return _get_state().get_audit_log(last_n)
 
 
 @mcp.tool()
@@ -134,8 +145,9 @@ def register_concern(
         source: Who is raising it — human, llm, or servitor.
         severity: note, warning, or critical.
     """
-    state.add_warning(concern, source, severity)
-    state.log_event(
+    s = _get_state()
+    s.add_warning(concern, source, severity)
+    s.log_event(
         "concern_registered",
         {
             "concern": concern,
@@ -143,8 +155,161 @@ def register_concern(
             "severity": severity,
         },
     )
-    n = len(state.warnings)
+    n = len(s.warnings)
     return f"Concern registered [{severity}] from {source}. Active warnings: {n}"
+
+
+@mcp.tool()
+def check_drift(
+    cdp: float = 0.0,
+    vne: float = 0.0,
+    correlation: float = 1.0,
+    selection: float = 0.0,
+    vne_history: list[float] | None = None,
+) -> dict:
+    """Check AGEM SOC metrics against RELF coboundary drift thresholds.
+
+    Implements the drift detection system from the Framework Operations
+    Manual. Detects chronic degradation (boiled-frog normalization,
+    algorithmic radicalization) BEFORE an H1 spike occurs.
+
+    Thresholds (validated via stress testing):
+      CDP > 2.0:        Concept-structure divergence widening
+      Correlation < 0.95: Structural integration weakening
+      VNE plateauing:   Exploration stagnation / echo chamber
+      Selection < 0:    Framework fitness declining
+
+    Args:
+        cdp: Concept-Divergence-Proximity from SOC metrics.
+        vne: Von Neumann Entropy from SOC metrics.
+        correlation: Structural correlation from SOC metrics.
+        selection: Selection coefficient from Price equation.
+        vne_history: Optional recent VNE values to detect plateauing.
+    """
+    alerts: list[dict] = []
+    risk_level = "low"
+
+    # CDP check — concept-structure divergence
+    if cdp > 2.5:
+        alerts.append({
+            "metric": "CDP",
+            "value": cdp,
+            "threshold": 2.0,
+            "severity": "critical",
+            "meaning": "Concepts severely detached from structural embedding.",
+            "response": "Investigate epistemic quality immediately. "
+                        "Check for compartmentalized reasoning.",
+        })
+        risk_level = "critical"
+    elif cdp > 2.0:
+        alerts.append({
+            "metric": "CDP",
+            "value": cdp,
+            "threshold": 2.0,
+            "severity": "warning",
+            "meaning": "Concept-structure divergence widening.",
+            "response": "Investigate epistemic quality.",
+        })
+        if risk_level == "low":
+            risk_level = "warning"
+
+    # Correlation check — structural integration
+    if correlation < 0.90:
+        alerts.append({
+            "metric": "Correlation",
+            "value": correlation,
+            "threshold": 0.95,
+            "severity": "critical",
+            "meaning": "Structural integration severely weakened. "
+                        "Risk of ethical compartmentalization.",
+            "response": "Check for isolated 'ends justify means' logic.",
+        })
+        risk_level = "critical"
+    elif correlation < 0.95:
+        alerts.append({
+            "metric": "Correlation",
+            "value": correlation,
+            "threshold": 0.95,
+            "severity": "warning",
+            "meaning": "Structural integration weakening.",
+            "response": "Check for compartmentalization.",
+        })
+        if risk_level == "low":
+            risk_level = "warning"
+
+    # Selection check — framework fitness
+    if selection < -0.5:
+        alerts.append({
+            "metric": "Selection",
+            "value": selection,
+            "threshold": 0.0,
+            "severity": "critical",
+            "meaning": "Framework fitness declining sharply against reality.",
+            "response": "Re-examine Tier 1 and Tier 2 constraint satisfaction.",
+        })
+        risk_level = "critical"
+    elif selection < 0:
+        alerts.append({
+            "metric": "Selection",
+            "value": selection,
+            "threshold": 0.0,
+            "severity": "warning",
+            "meaning": "Overall framework fitness declining.",
+            "response": "Re-examine constraint satisfaction.",
+        })
+        if risk_level in ("low",):
+            risk_level = "warning"
+
+    # VNE plateau check — exploration stagnation
+    if vne_history and len(vne_history) >= 3:
+        recent = vne_history[-3:]
+        vne_range = max(recent) - min(recent)
+        if vne_range < 0.01 and vne > 0:
+            alerts.append({
+                "metric": "VNE",
+                "value": vne,
+                "threshold": "plateauing",
+                "severity": "warning",
+                "meaning": "Exploration stagnation — intellectual echo chamber forming.",
+                "response": "Actively seek disconfirming evidence. "
+                            "Omega4 epistemic obligation activated.",
+            })
+            if risk_level == "low":
+                risk_level = "warning"
+
+    # Log drift check
+    s = _get_state()
+    s.log_event("drift_check", {
+        "cdp": cdp, "vne": vne, "correlation": correlation,
+        "selection": selection, "alerts": len(alerts),
+        "risk_level": risk_level,
+    })
+
+    # If critical, update kernel status
+    if risk_level == "critical":
+        s.kernel_status = "WARNING"
+        s.add_warning(
+            f"Coboundary drift critical: {len(alerts)} alert(s)",
+            "servitor", "critical",
+        )
+
+    return {
+        "risk_level": risk_level,
+        "alerts": alerts,
+        "alert_count": len(alerts),
+        "metrics_received": {
+            "cdp": cdp, "vne": vne,
+            "correlation": correlation, "selection": selection,
+        },
+        "guidance": (
+            "CRITICAL: Multiple drift indicators triggered. "
+            "Halt optimization and investigate epistemic quality."
+            if risk_level == "critical"
+            else "WARNING: Drift detected. Increase verification depth."
+            if risk_level == "warning"
+            else "No drift detected. System within tolerance."
+        ),
+    }
 
 
 @mcp.tool()
@@ -275,9 +440,23 @@ def _rule_based_triage(content: str) -> dict:
 
 def main():
     """Entry point — called by `conscience-servitor` script or `uv run`."""
-    global engine
+    global engine, state, clients
 
     logger.info("Conscience Servitor starting — tripartite oversight")
+
+    # Initialize MCP client manager for backend verification
+    clients = MCPClientManager()
+    clients.load_config()
+    if clients.backends:
+        logger.info(
+            "Backend verification enabled: %s",
+            ", ".join(clients.backends.keys()),
+        )
+    else:
+        logger.warning("No backends configured — using rule-based evaluation only")
+
+    # Initialize state with client manager
+    state = ServitorState(DATA_DIR / "audit.jsonl", clients)
 
     # Attempt to load LLM2Vec-Gen model
     try:

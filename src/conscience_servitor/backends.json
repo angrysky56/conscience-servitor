@@ -1,0 +1,29 @@
+{
+  "hipai-montague": {
+    "command": "uv",
+    "args": [
+      "--directory",
+      "/home/ty/Repositories/ai_workspace/HiPAI-Montague-Semantic-Cognition",
+      "run", "python", "-m", "hipai.mcp_server"
+    ],
+    "env": { "PYTHONPATH": "src" }
+  },
+  "mcp-logic": {
+    "command": "uv",
+    "args": [
+      "--directory",
+      "/home/ty/Repositories/ai_workspace/mcp-logic/src/mcp_logic",
+      "run", "mcp_logic",
+      "--prover-path",
+      "/home/ty/Repositories/ai_workspace/mcp-logic/ladr/bin"
+    ]
+  },
+  "sheaf-consistency-enforcer": {
+    "command": "uv",
+    "args": [
+      "--directory",
+      "/home/ty/Repositories/ai_workspace/sheaf-consistency-enforcer",
+      "run", "sheaf-enforcer"
+    ]
+  }
+}

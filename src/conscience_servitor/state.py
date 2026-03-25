@@ -11,6 +11,11 @@ import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .mcp_clients import MCPClientManager
+
 from .eval_engine import EvaluationEngine
 
 logger = logging.getLogger("conscience-servitor.state")
@@ -19,14 +24,14 @@ logger = logging.getLogger("conscience-servitor.state")
 class ServitorState:
     """Persistent session state for the conscience servitor."""
 
-    def __init__(self, audit_path: Path):
+    def __init__(self, audit_path: Path, clients: MCPClientManager | None = None):
         self.audit_path = audit_path
         self.claims: list[dict] = []
         self.warnings: list[dict] = []
         self.triage_history: list[dict] = []
         self.kernel_status: str = "KERNEL1"
         self._audit_path = audit_path
-        self.eval_engine = EvaluationEngine(self)
+        self.eval_engine = EvaluationEngine(self, clients)
 
     def _now(self) -> str:
         return datetime.now(timezone.utc).isoformat()

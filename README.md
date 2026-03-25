@@ -76,11 +76,56 @@ Add to your `claude_desktop_config.json`:
 | Tool | Purpose |
 |------|---------|
 | `triage` | Classify prompt by ethical risk via LLM2Vec-Gen or keyword fallback |
-| `evaluate` | Full EFHF L2-L5 evaluation — returns KERNEL status and guidance |
-| `status` | Current KERNEL state, active warnings, model/cluster info |
+| `evaluate` | Full EFHF L2-L5 evaluation via MCP backends — returns KERNEL status and guidance |
+| `status` | Current KERNEL state, active warnings, model/cluster/backend info |
 | `log` | Human-readable audit trail of all evaluations |
 | `register_concern` | Flag ethical concerns (human, LLM, or servitor) |
 | `decode_intent` | Decode predicted response from embedding (interpretability) |
+| `check_drift` | Evaluate SOC metrics against RELF coboundary drift thresholds |
+
+## Backend Verification (NEW)
+
+The evaluation engine now connects to three MCP backends for real
+structural verification instead of keyword matching:
+
+| Backend | Role | Tools Used |
+|---------|------|------------|
+| **hipai-montague** | T1 Deontological | `check_action`, `calibrate_belief`, `evaluate_hypothesis` |
+| **mcp-logic** | T2 Formal Verification | `check_well_formed`, `find_counterexample` |
+| **sheaf-consistency-enforcer** | T3/L5 Coherence | `register_agent_state`, `run_admm_cycle`, `get_closure_status` |
+
+Configuration in `src/conscience_servitor/backends.json`. Falls back
+gracefully to rule-based checks when backends are unavailable.
+
+### Evaluation Pipeline
+
+```
+T1 (hipai-montague)     T2 (mcp-logic)     T3 (sheaf-enforcer)
+   check_action    →     check_well_formed  →   register_state
+   calibrate_belief      find_counterexample     run_admm_cycle
+                                                 get_closure_status
+         │                      │                      │
+         └──────────────────────┴──────────────────────┘
+                                │
+                    KERNEL STATUS DETERMINATION
+                    KERNEL1 / WEAK / WARNING / TIMEOUT
+```
+
+T1 short-circuits: if a deontological block fires, T2/T3 are skipped.
+EBE theorem obligation: on T1 BLOCK, `calibrate_belief` runs automatically.
+
+### Drift Detection
+
+The `check_drift` tool implements the RELF coboundary drift detection
+thresholds validated via Plague Village and Algorithmic Radicalization
+stress tests:
+
+| Metric | Threshold | Meaning |
+|--------|-----------|---------|
+| CDP | > 2.0 | Concept-structure divergence |
+| Correlation | < 0.95 | Structural integration weakening |
+| VNE | Plateauing | Exploration stagnation |
+| Selection | < 0 | Framework fitness declining |
 
 ## Project Structure
 
@@ -96,8 +141,11 @@ conscience-servitor/
     ├── __init__.py
     ├── server.py                    # FastMCP server — tools + entry point
     ├── triage.py                    # LLM2Vec-Gen engine + auto-calibration
-    ├── eval_engine.py               # Multi-tiered ethical evaluation (T1/T2/T3)
+    ├── eval_engine.py               # Multi-tiered eval via MCP backends (T1/T2/T3)
     ├── state.py                     # Session state + audit logging
+    ├── mcp_clients.py               # Lazy MCP client connections to backends
+    ├── backends.json                # Backend server configurations
+    ├── data/                        # Centroids, audit logs (auto-created)
     └── vendor/llm2vec_gen/          # Vendored inference code (MIT, McGill NLP)
         ├── model.py                 # LLM2VecGenModel wrapper
         ├── modeling_encoder_decoder.py  # EncoderDecoderModel core
