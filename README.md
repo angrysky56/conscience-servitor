@@ -99,6 +99,34 @@ gracefully to rule-based checks when backends are unavailable.
 
 ### Evaluation Pipeline
 
+Two operational modes:
+
+**Orchestrated Mode** (within AGEM):
+The LLM calls `evaluate` with `external_results` containing pre-computed
+verification from hipai-montague, mcp-logic, and sheaf-consistency-enforcer.
+The servitor cross-checks these against independent analysis — catching
+tier-inversion language, harm keywords, and inconsistencies the LLM missed.
+
+```python
+# AGEM calls (via call_mcp_tool):
+conscience-servitor:evaluate(
+  claims=["The ends justify the means here"],
+  ethical_tier="tier3_utility",
+  external_results={
+    "t1_result": {"status": "PASS", ...},   # from hipai-montague
+    "t2_result": {"status": "PASS", ...},   # from mcp-logic
+    "t3_result": {"status": "PASS", ...},   # from sheaf-enforcer
+    "closure_status": {"status": "KERNEL1"} # from get_closure_status
+  }
+)
+# Servitor catches tier-inversion language → overrides T2 to FAIL
+```
+
+**Standalone Mode** (outside AGEM):
+The servitor spawns its own StdioTransport connections to backends and
+performs independent structural verification. Call `evaluate` without
+`external_results`.
+
 ```
 T1 (hipai-montague)     T2 (mcp-logic)     T3 (sheaf-enforcer)
    check_action    →     check_well_formed  →   register_state
@@ -151,6 +179,34 @@ conscience-servitor/
         ├── modeling_encoder_decoder.py  # EncoderDecoderModel core
         └── utils.py                 # Config loading
 ```
+
+## AGEM Integration
+
+Within the AGEM ecosystem, the conscience-servitor is accessed via
+`call_mcp_tool("conscience-servitor", ...)` meta-tools. The integration
+follows AGEM's Strategy 3 (Verified Reasoning) and Strategy 4
+(Value-Anchored Analysis) from the agem-expert skill:
+
+```
+AGEM Pipeline (orchestrated by LLM):
+1. conscience-servitor:triage(content)          → assess risk
+2. hipai-montague:check_action(...)             → T1 check
+3. mcp-logic:prove/find_counterexample(...)     → T2 check
+4. sheaf-enforcer:register_agent_state(...)     → T3 state
+5. sheaf-enforcer:run_admm_cycle()              → T3 coherence
+6. conscience-servitor:evaluate(                → cross-check ALL results
+     claims, external_results={t1, t2, t3, closure}
+   )
+```
+
+The servitor's cross-check catches what the LLM might miss:
+- Tier-inversion language the LLM rationalized past
+- Harm keywords in claims that hipai's world model didn't flag
+  (e.g., missing Omega1 axioms)
+- Inconsistencies between T1/T2/T3 results
+
+This preserves the tripartite oversight model: the servitor independently
+verifies what the LLM reports, even when the LLM controls the pipeline.
 
 ## Hardware & CUDA Notes
 

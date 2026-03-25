@@ -1,20 +1,23 @@
 """
-Evaluation Engine — Multi-tiered ethical assessment via MCP backends.
+Evaluation Engine — Multi-tiered ethical assessment.
 
-T1: Deontological constraint checking via hipai-montague
-    - check_action: route proposed actions through Paraclete T1 layer
-    - calibrate_belief: SeeksDisconfirmation on blocks (EBE theorem)
+Supports two operational modes:
 
-T2: Formal verification via mcp-logic
-    - check_well_formed: validate logical structure
-    - prove / find_counterexample: consistency checking
+ORCHESTRATED MODE (within AGEM):
+  The LLM orchestrator calls triage/evaluate, optionally passing in
+  pre-computed results from hipai-montague, mcp-logic, and
+  sheaf-consistency-enforcer that it already called in the same pipeline.
+  The engine validates consistency of those results, checks for tier
+  inversion, and maintains audit trail. Does NOT call backends directly.
 
-T3/L5: Coherence enforcement via sheaf-consistency-enforcer
-    - register_agent_state: register servitor's ethical state
-    - run_admm_cycle: cross-agent coherence check
-    - get_closure_status: KERNEL status determination
+STANDALONE MODE (outside AGEM or as independent verifier):
+  The engine spawns its own StdioTransport connections to backends via
+  MCPClientManager, pre-loads Omega1 axioms, and performs independent
+  structural verification. For deployments where the servitor IS the
+  orchestrator.
 
-Falls back to rule-based checks when backends are unavailable.
+Falls back to rule-based checks when neither pre-computed results
+nor backends are available.
 """
 
 from __future__ import annotations
@@ -419,9 +422,22 @@ class EvaluationEngine:
     # ── Main orchestrator ─────────────────────────────────────
 
     async def evaluate_tiered(
-        self, claims: list[str], tier_hint: str | None
+        self, claims: list[str], tier_hint: str | None,
+        external_results: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Run full T1→T2→T3 evaluation pipeline.
+
+        Args:
+            claims: Substantive claims to evaluate.
+            tier_hint: Which Paraclete tier is engaged.
+            external_results: Pre-computed results from AGEM pipeline.
+                If provided, validates these instead of calling backends.
+                Expected keys: t1_result, t2_result, t3_result, closure_status.
+
+        Modes:
+            - external_results provided → Orchestrated mode (verify what AGEM reports)
+            - external_results None + backends available → Standalone mode (call backends)
+            - neither → Rule-based fallback
 
         Short-circuits on T1 FAIL (deontological block).
         Aggregates results into a single KERNEL status determination.
@@ -433,7 +449,23 @@ class EvaluationEngine:
             "kernel_status": "KERNEL1",
             "proof_logs": [],
             "backends_used": [],
+            "mode": "unknown",
         }
+
+        if external_results is not None:
+            results["mode"] = "orchestrated"
+            return await self._evaluate_orchestrated(
+                claims, tier_hint, external_results, results
+            )
+        else:
+            results["mode"] = "standalone" if self.has_backends else "rule-based"
+            return await self._evaluate_standalone(claims, tier_hint, results)
+
+    async def _evaluate_standalone(
+        self, claims: list[str], tier_hint: str | None,
+        results: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Standalone mode: call backends directly or fall back to rules."""
 
         # 1. T1: Deontological (short-circuit on FAIL)
         t1 = await self._run_t1_check(claims)
@@ -492,7 +524,154 @@ class EvaluationEngine:
 
     # Alias for state.py compatibility
     async def evaluate_claims(
-        self, claims: list[str], tier_hint: str | None
+        self, claims: list[str], tier_hint: str | None,
+        external_results: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Alias for evaluate_tiered — called by ServitorState.evaluate()."""
-        return await self.evaluate_tiered(claims, tier_hint)
+        return await self.evaluate_tiered(claims, tier_hint, external_results)
+
+    # ── Orchestrated mode ─────────────────────────────────────
+
+    async def _evaluate_orchestrated(
+        self,
+        claims: list[str],
+        tier_hint: str | None,
+        external: dict[str, Any],
+        results: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Orchestrated mode: verify pre-computed results from AGEM pipeline.
+
+        Cross-checks external results against independent analysis:
+        1. If claims contain harm keywords but external T1 says PASS → flag
+        2. If tier-inversion language present but not flagged → flag
+        3. If closure_status disagrees with external kernel_status → flag
+        4. Maintains independent audit trail regardless of what LLM reports
+
+        Args:
+            external: Pre-computed results. Expected keys:
+                t1_result: dict with status, details (from hipai-montague)
+                t2_result: dict with status, details (from mcp-logic)
+                t3_result: dict with status, kernel_status (from sheaf-enforcer)
+                closure_status: dict from get_closure_status (optional)
+        """
+        inconsistencies: list[str] = []
+
+        # ── Cross-check T1 ────────────────────────────────────
+        ext_t1 = external.get("t1_result", {})
+        ext_t1_status = ext_t1.get("status", "UNKNOWN")
+
+        # Independent harm-keyword check
+        has_harm = any(_has_harm_keywords(c) for c in claims)
+        has_triples = any(_extract_triples(c) for c in claims)
+
+        if ext_t1_status == "PASS" and has_harm and has_triples:
+            inconsistencies.append(
+                "CROSS-CHECK: Claims contain harm-relational language "
+                "but external T1 reports PASS. Verify hipai-montague "
+                "world model contains Omega1 axioms."
+            )
+
+        if ext_t1_status == "FAIL":
+            results["tier1"] = ext_t1
+            results["kernel_status"] = "WARNING"
+            results["proof_logs"].append(f"T1 FAIL (external): {ext_t1.get('details', '')}")
+            results["backends_used"].append("external-hipai-montague")
+            # T1 block is absolute — skip further checks
+            if inconsistencies:
+                results["proof_logs"].extend(inconsistencies)
+            return results
+
+        results["tier1"] = {
+            **ext_t1,
+            "verified_by": "servitor-cross-check",
+            "harm_keywords_present": has_harm,
+        }
+        results["backends_used"].append("external-hipai-montague")
+
+        # ── Cross-check T2 ────────────────────────────────────
+        ext_t2 = external.get("t2_result", {})
+        ext_t2_status = ext_t2.get("status", "UNKNOWN")
+
+        # Independent tier-inversion check
+        tier_inv = _detect_tier_inversion(claims)
+        if tier_inv and ext_t2_status == "PASS":
+            inconsistencies.append(
+                "CROSS-CHECK: Tier-inversion language detected in claims "
+                "but external T2 reports PASS. Utility may be overriding "
+                "deontological constraints."
+            )
+            results["tier2"] = {
+                "status": "FAIL",
+                "details": "Servitor detected tier-inversion language "
+                           "that external verification missed.",
+                "tier_inversion": True,
+                "verified_by": "servitor-cross-check",
+            }
+            results["kernel_status"] = "WARNING"
+            results["proof_logs"].append("Tier inversion detected by servitor cross-check.")
+        elif ext_t2_status == "FAIL":
+            results["tier2"] = ext_t2
+            results["kernel_status"] = "WEAK"
+            results["proof_logs"].append(f"T2 FAIL (external): {ext_t2.get('details', '')}")
+            if ext_t2.get("tier_inversion"):
+                results["kernel_status"] = "WARNING"
+        else:
+            results["tier2"] = {
+                **ext_t2,
+                "verified_by": "servitor-cross-check",
+                "tier_inversion_check": tier_inv,
+            }
+        results["backends_used"].append("external-mcp-logic")
+
+        # ── Cross-check T3 / Closure ──────────────────────────
+        ext_t3 = external.get("t3_result", {})
+        ext_closure = external.get("closure_status", {})
+
+        ext_kernel = (
+            ext_closure.get("status")
+            or ext_closure.get("closure_status")
+            or ext_t3.get("kernel_status")
+            or "UNKNOWN"
+        )
+
+        # If closure says WARNING/TIMEOUT but claims seem benign, note it
+        if ext_kernel in ("WARNING", "TIMEOUT", "KERNEL2"):
+            results["tier3"] = {
+                **ext_t3,
+                "kernel_status": ext_kernel,
+                "verified_by": "servitor-cross-check",
+            }
+            if ext_kernel in ("WARNING", "TIMEOUT", "KERNEL2"):
+                results["kernel_status"] = ext_kernel
+            results["proof_logs"].append(
+                f"T3: Sheaf closure reports {ext_kernel}."
+            )
+        elif ext_kernel == "WEAK":
+            results["tier3"] = {
+                **ext_t3,
+                "kernel_status": "WEAK",
+                "verified_by": "servitor-cross-check",
+            }
+            if results["kernel_status"] == "KERNEL1":
+                results["kernel_status"] = "WEAK"
+        else:
+            results["tier3"] = {
+                **ext_t3,
+                "kernel_status": ext_kernel,
+                "verified_by": "servitor-cross-check",
+            }
+        results["backends_used"].append("external-sheaf-enforcer")
+
+        # ── Final cross-check summary ─────────────────────────
+        if inconsistencies:
+            results["cross_check_warnings"] = inconsistencies
+            results["proof_logs"].extend(inconsistencies)
+            # Escalate if multiple inconsistencies found
+            if len(inconsistencies) >= 2 and results["kernel_status"] == "KERNEL1":
+                results["kernel_status"] = "WEAK"
+                results["proof_logs"].append(
+                    "Multiple cross-check inconsistencies — "
+                    "escalating to WEAK lumpability."
+                )
+
+        return results

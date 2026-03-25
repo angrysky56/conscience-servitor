@@ -69,18 +69,29 @@ class ServitorState:
         if severity == "critical":
             self.kernel_status = "WARNING"
 
-    async def evaluate(self, claims: list[str], tier: str | None) -> dict:
+    async def evaluate(
+        self, claims: list[str], tier: str | None,
+        external_results: dict | None = None,
+    ) -> dict:
         """Run evaluation pipeline.
 
         Delegates to EvaluationEngine for tiered assessment.
         Returns KERNEL status and guidance.
+
+        Args:
+            claims: Claims to evaluate.
+            tier: Ethical tier hint.
+            external_results: Pre-computed results from AGEM pipeline.
+                When provided, engine runs in orchestrated mode.
         """
         # Register claims before evaluation
         for claim in claims:
             self.register_claim(claim, tier or "undifferentiated")
 
         # Run multi-tiered evaluation
-        eval_results = await self.eval_engine.evaluate_claims(claims, tier)
+        eval_results = await self.eval_engine.evaluate_claims(
+            claims, tier, external_results
+        )
         
         # Sync state with eval results
         self.kernel_status = eval_results["kernel_status"]

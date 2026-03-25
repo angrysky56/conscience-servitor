@@ -83,22 +83,43 @@ def triage(content: str, context: str = "") -> dict:
 
 
 @mcp.tool()
-async def evaluate(claims: list[str], ethical_tier: str = "unknown") -> dict:
+async def evaluate(
+    claims: list[str],
+    ethical_tier: str = "unknown",
+    external_results: dict | None = None,
+) -> dict:
     """Run full EFHF L2-L5 evaluation on claims.
 
     Returns KERNEL status, consistency scores, and pre-response guidance.
     Use when triage returns requires_full_eval=true.
 
+    Two modes of operation:
+
+    ORCHESTRATED (within AGEM): Pass external_results with pre-computed
+    verification from hipai-montague, mcp-logic, sheaf-enforcer. The
+    servitor cross-checks these against its own independent analysis.
+
+    STANDALONE (no external_results): The servitor calls backends directly
+    via its own MCP client connections, or falls back to rule-based checks.
+
     Args:
         claims: List of substantive claims to evaluate.
-        ethical_tier: Which Paraclete tier is engaged (tier1_harm, tier2_virtue, tier3_utility, unknown).
+        ethical_tier: Which Paraclete tier is engaged
+            (tier1_harm, tier2_virtue, tier3_utility, unknown).
+        external_results: Pre-computed results from AGEM pipeline.
+            Expected keys: t1_result, t2_result, t3_result, closure_status.
+            When provided, runs in orchestrated cross-check mode.
     """
     s = _get_state()
     for claim in claims:
         s.register_claim(claim, ethical_tier)
 
-    evaluation = await s.evaluate(claims, ethical_tier)
-    s.log_event("evaluation", {"claims": claims, "result": evaluation})
+    evaluation = await s.evaluate(claims, ethical_tier, external_results)
+    s.log_event("evaluation", {
+        "claims": claims,
+        "mode": evaluation.get("mode", "unknown"),
+        "result": evaluation,
+    })
     return evaluation
 
 
