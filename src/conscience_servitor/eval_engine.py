@@ -557,7 +557,9 @@ class EvaluationEngine:
         inconsistencies: list[str] = []
 
         # ── Cross-check T1 ────────────────────────────────────
-        ext_t1 = external.get("t1_result", {})
+        ext_t1 = external.get("t1_result")
+        if not isinstance(ext_t1, dict):
+            ext_t1 = {}
         ext_t1_status = ext_t1.get("status", "UNKNOWN")
 
         # Independent harm-keyword check
@@ -589,7 +591,9 @@ class EvaluationEngine:
         results["backends_used"].append("external-hipai-montague")
 
         # ── Cross-check T2 ────────────────────────────────────
-        ext_t2 = external.get("t2_result", {})
+        ext_t2 = external.get("t2_result")
+        if not isinstance(ext_t2, dict):
+            ext_t2 = {}
         ext_t2_status = ext_t2.get("status", "UNKNOWN")
 
         # Independent tier-inversion check
@@ -624,8 +628,13 @@ class EvaluationEngine:
         results["backends_used"].append("external-mcp-logic")
 
         # ── Cross-check T3 / Closure ──────────────────────────
-        ext_t3 = external.get("t3_result", {})
-        ext_closure = external.get("closure_status", {})
+        ext_t3 = external.get("t3_result")
+        if not isinstance(ext_t3, dict):
+            ext_t3 = {}
+        ext_closure = external.get("closure_status")
+        if not isinstance(ext_closure, dict):
+            # Handle bare string like "WEAK" or missing value
+            ext_closure = {"status": ext_closure} if ext_closure else {}
 
         ext_kernel = (
             ext_closure.get("status")
